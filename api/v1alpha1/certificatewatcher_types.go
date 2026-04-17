@@ -30,9 +30,12 @@ type CertificateWatcherSpec struct {
 	// The following markers will use OpenAPI v3 schema to validate the value
 	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
 
-	// foo is an example field of CertificateWatcher. Edit certificatewatcher_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
+	// +kubebuilder:validation:MinLength=0
+	// +required
+	SecretName string `json:"secretName"`
+	// +kubebuilder:validation:MinLength=0
+	// +required
+	SecretKey string `json:"secretKey"`
 }
 
 // CertificateWatcherStatus defines the observed state of CertificateWatcher.
@@ -42,6 +45,14 @@ type CertificateWatcherStatus struct {
 
 	// For Kubernetes API conventions, see:
 	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+
+	// ValidUntil is a string representation of the certificate expiry date and time.
+	// +optional
+	ValidUntil string `json:"validUntil,omitempty"`
+
+	// ValidDays returns rounded number of days left until certificate expires.
+	// +optional
+	ValidDays string `json:"validDays,omitempty"`
 
 	// conditions represent the current state of the CertificateWatcher resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.

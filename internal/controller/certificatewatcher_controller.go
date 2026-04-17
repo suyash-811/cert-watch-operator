@@ -18,14 +18,47 @@ package controller
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
+	"strconv"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/prometheus/client_golang/prometheus"
 	monitoringv1alpha1 "github.com/suyash-811/cert-watch-operator/api/v1alpha1"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
+
+const (
+	SECRET_TYPE_CLUSTERAPI = "cluster.x-k8s.io/secret"
+)
+
+var (
+	certDaysRemaining = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "cert_watcher_days_remaining",
+			Help: "Number of days remaining until certificate expires",
+		},
+		[]string{
+			"name",
+			"namespace",
+		})
+)
+
+func init() {
+	metrics.Registry.MustRegister(certDaysRemaining)
+}
 
 // CertificateWatcherReconciler reconciles a CertificateWatcher object
 type CertificateWatcherReconciler struct {
@@ -36,6 +69,7 @@ type CertificateWatcherReconciler struct {
 // +kubebuilder:rbac:groups=monitoring.sonaw.net,resources=certificatewatchers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.sonaw.net,resources=certificatewatchers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=monitoring.sonaw.net,resources=certificatewatchers/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -47,17 +81,155 @@ type CertificateWatcherReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
 func (r *CertificateWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	logger := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	var CertificateWatcher monitoringv1alpha1.CertificateWatcher
+	if err := r.Get(ctx, req.NamespacedName, &CertificateWatcher); err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.Info("CertificateWatcher not found. Ignoring since it might be deleted.")
+			certDaysRemaining.Delete(prometheus.Labels{
+				"name":      req.Name,
+				"namespace": req.Namespace,
+			})
+			return ctrl.Result{}, nil
+		}
 
-	return ctrl.Result{}, nil
+		return ctrl.Result{}, err
+	}
+
+	var secret corev1.Secret
+
+	secretNamespacedName := client.ObjectKey{
+		Namespace: req.Namespace,
+		Name:      CertificateWatcher.Spec.SecretName,
+	}
+
+	// Get secret mentioned in the CertificateWatcher resource
+	if err := r.Get(ctx, secretNamespacedName, &secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.Info("Secret %s not found in namespace %s. Will not continue.", secretNamespacedName.Name, secretNamespacedName.Namespace)
+			return ctrl.Result{}, nil
+		}
+
+		return ctrl.Result{}, err
+	}
+
+	if len(secret.Data) == 0 {
+		logger.Info("No data found in secret. Will not continue.")
+		return ctrl.Result{}, nil
+	}
+
+	secretKey := CertificateWatcher.Spec.SecretKey
+
+	logger.Info("Detecting secret type", "type", secret.Type)
+
+	var certBytes []byte
+
+	if secret.Type != SECRET_TYPE_CLUSTERAPI {
+		var ok bool
+		certBytes, ok = secret.Data[secretKey]
+		if !ok {
+			logger.Info("Did not find specified key in secret. Will not continue")
+			return ctrl.Result{}, nil
+		}
+	} else {
+		kubeConfigBytes, ok := secret.Data[secretKey]
+		if !ok {
+			logger.Info("Did not find specified key in secret. Will not continue")
+			return ctrl.Result{}, nil
+		}
+		kubeConfig, err := clientcmd.Load(kubeConfigBytes)
+		if err != nil {
+			logger.Info("Could not parse kubeconfig in secret")
+			return ctrl.Result{}, nil
+		}
+
+		if err := clientcmd.Validate(*kubeConfig); err != nil {
+			logger.Info("Could not valdidate the parsed kubeconfig", "error", err)
+			return ctrl.Result{}, nil
+		}
+
+		if len(kubeConfig.AuthInfos) != 1 {
+			logger.Info("Found more than one user auth in kubeconfig. Will not continue.", "found", strconv.FormatInt(int64(len(kubeConfig.AuthInfos)), 10))
+			return ctrl.Result{}, nil
+		}
+
+		var targetAuth *clientcmdapi.AuthInfo
+		for _, auth := range kubeConfig.AuthInfos {
+			targetAuth = auth
+			break
+		}
+
+		certBytes = targetAuth.ClientCertificateData
+	}
+
+	block, _ := pem.Decode(certBytes)
+	if block == nil || block.Type != "CERTIFICATE" {
+		logger.Info("failed to decode PEM block containing certificate")
+		return ctrl.Result{}, nil
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		logger.Info("Error parsing certificate.")
+		return ctrl.Result{}, nil
+	}
+
+	certValidUntil := cert.NotAfter
+	certValidDuration := time.Until(certValidUntil)
+	days := int64(certValidDuration.Hours() / 24)
+
+	fmt.Printf("Certificate valid until: %s\n", certValidUntil.Format(time.RFC3339))
+	fmt.Printf("Certificate valid duration days: %s\n\n", strconv.FormatInt(days, 10))
+	CertificateWatcher.Status.ValidUntil = certValidUntil.Format(time.RFC3339)
+	CertificateWatcher.Status.ValidDays = strconv.FormatInt(days, 10)
+
+	if err := r.Status().Update(ctx, &CertificateWatcher); err != nil {
+		logger.Error(err, "unable to update CertificateWatcher status")
+		return ctrl.Result{}, err
+	}
+
+	certDaysRemaining.With(prometheus.Labels{
+		"name":      req.Name,
+		"namespace": req.Namespace,
+	}).Set(float64(days))
+
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+func (r *CertificateWatcherReconciler) getLinkedWatcher(ctx context.Context, secret client.Object) []reconcile.Request {
+	watcherList := &monitoringv1alpha1.CertificateWatcherList{}
+	listOpts := client.ListOptions{
+		Namespace: secret.GetNamespace(),
+	}
+	err := r.List(ctx, watcherList, &listOpts)
+	if err != nil {
+		return []reconcile.Request{}
+	}
+
+	var requests []reconcile.Request
+	for _, watcher := range watcherList.Items {
+		if watcher.Spec.SecretName == secret.GetName() {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: client.ObjectKey{
+					Name:      watcher.GetName(),
+					Namespace: watcher.GetNamespace(),
+				},
+			})
+		}
+	}
+
+	return requests
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *CertificateWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&monitoringv1alpha1.CertificateWatcher{}).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.getLinkedWatcher),
+		).
 		Named("certificatewatcher").
 		Complete(r)
 }

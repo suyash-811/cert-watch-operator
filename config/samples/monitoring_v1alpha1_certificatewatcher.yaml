@@ -6,4 +6,5 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: certificatewatcher-sample
 spec:
-  # TODO(user): Add fields here
+  secretName: foo
+  secretKey: bar
