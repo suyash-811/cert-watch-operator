@@ -20,7 +20,6 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -63,7 +62,8 @@ func init() {
 // CertificateWatcherReconciler reconciles a CertificateWatcher object
 type CertificateWatcherReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme           *runtime.Scheme
+	RequeueFrequency time.Duration
 }
 
 // +kubebuilder:rbac:groups=monitoring.sonaw.net,resources=certificatewatchers,verbs=get;list;watch;create;update;patch;delete
@@ -82,18 +82,19 @@ type CertificateWatcherReconciler struct {
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
 func (r *CertificateWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := logf.FromContext(ctx)
+	logger.Info("Started reconciliation loop")
 
 	var CertificateWatcher monitoringv1alpha1.CertificateWatcher
 	if err := r.Get(ctx, req.NamespacedName, &CertificateWatcher); err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Info("CertificateWatcher not found. Ignoring since it might be deleted.")
+			logger.Info("Could not find CertificateWatcher, ignored error as it might be deleted")
 			certDaysRemaining.Delete(prometheus.Labels{
 				"name":      req.Name,
 				"namespace": req.Namespace,
 			})
 			return ctrl.Result{}, nil
 		}
-
+		logger.Error(err, "Failed to get CertificateWatcher resource")
 		return ctrl.Result{}, err
 	}
 
@@ -107,21 +108,21 @@ func (r *CertificateWatcherReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// Get secret mentioned in the CertificateWatcher resource
 	if err := r.Get(ctx, secretNamespacedName, &secret); err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Info("Secret %s not found in namespace %s. Will not continue.", secretNamespacedName.Name, secretNamespacedName.Namespace)
+			logger.Info("Could not find secret in namespace", "namespace", secretNamespacedName.Namespace, "name", secretNamespacedName.Name)
 			return ctrl.Result{}, nil
 		}
-
+		logger.Error(err, "Failed to get secret due to system error")
 		return ctrl.Result{}, err
 	}
 
 	if len(secret.Data) == 0 {
-		logger.Info("No data found in secret. Will not continue.")
+		logger.Info("Did not find any data in secret", "namespace", secretNamespacedName.Namespace, "name", secretNamespacedName.Name)
 		return ctrl.Result{}, nil
 	}
 
 	secretKey := CertificateWatcher.Spec.SecretKey
 
-	logger.Info("Detecting secret type", "type", secret.Type)
+	logger.Info("Detected secret of type", "type", secret.Type)
 
 	var certBytes []byte
 
@@ -129,18 +130,18 @@ func (r *CertificateWatcherReconciler) Reconcile(ctx context.Context, req ctrl.R
 		var ok bool
 		certBytes, ok = secret.Data[secretKey]
 		if !ok {
-			logger.Info("Did not find specified key in secret. Will not continue")
+			logger.Info("Did not find specified key in secret", "key", secretKey)
 			return ctrl.Result{}, nil
 		}
 	} else {
 		kubeConfigBytes, ok := secret.Data[secretKey]
 		if !ok {
-			logger.Info("Did not find specified key in secret. Will not continue")
+			logger.Info("Did not find specified key in secret", "key", secretKey)
 			return ctrl.Result{}, nil
 		}
 		kubeConfig, err := clientcmd.Load(kubeConfigBytes)
 		if err != nil {
-			logger.Info("Could not parse kubeconfig in secret")
+			logger.Info("Could not parse kubeconfig saved at secret key", "key", secretKey)
 			return ctrl.Result{}, nil
 		}
 
@@ -150,7 +151,7 @@ func (r *CertificateWatcherReconciler) Reconcile(ctx context.Context, req ctrl.R
 		}
 
 		if len(kubeConfig.AuthInfos) != 1 {
-			logger.Info("Found more than one user auth in kubeconfig. Will not continue.", "found", strconv.FormatInt(int64(len(kubeConfig.AuthInfos)), 10))
+			logger.Info("Found more than one user auth in kubeconfig. The kubeconfig must have only one user auth", "numUserAuths", strconv.FormatInt(int64(len(kubeConfig.AuthInfos)), 10))
 			return ctrl.Result{}, nil
 		}
 
@@ -165,13 +166,13 @@ func (r *CertificateWatcherReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	block, _ := pem.Decode(certBytes)
 	if block == nil || block.Type != "CERTIFICATE" {
-		logger.Info("failed to decode PEM block containing certificate")
+		logger.Info("Failed to decode PEM block containing certificate")
 		return ctrl.Result{}, nil
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		logger.Info("Error parsing certificate.")
+		logger.Info("Error parsing certificate", "error", err)
 		return ctrl.Result{}, nil
 	}
 
@@ -179,13 +180,11 @@ func (r *CertificateWatcherReconciler) Reconcile(ctx context.Context, req ctrl.R
 	certValidDuration := time.Until(certValidUntil)
 	days := int64(certValidDuration.Hours() / 24)
 
-	fmt.Printf("Certificate valid until: %s\n", certValidUntil.Format(time.RFC3339))
-	fmt.Printf("Certificate valid duration days: %s\n\n", strconv.FormatInt(days, 10))
 	CertificateWatcher.Status.ValidUntil = certValidUntil.Format(time.RFC3339)
 	CertificateWatcher.Status.ValidDays = strconv.FormatInt(days, 10)
 
 	if err := r.Status().Update(ctx, &CertificateWatcher); err != nil {
-		logger.Error(err, "unable to update CertificateWatcher status")
+		logger.Error(err, "Cloud not update CertificateWatcher status")
 		return ctrl.Result{}, err
 	}
 
@@ -194,7 +193,7 @@ func (r *CertificateWatcherReconciler) Reconcile(ctx context.Context, req ctrl.R
 		"namespace": req.Namespace,
 	}).Set(float64(days))
 
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: r.RequeueFrequency}, nil
 }
 
 func (r *CertificateWatcherReconciler) getLinkedWatcher(ctx context.Context, secret client.Object) []reconcile.Request {

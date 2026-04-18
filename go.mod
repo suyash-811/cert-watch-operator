@@ -1,6 +1,6 @@
 module github.com/suyash-811/cert-watch-operator
 
-go 1.25.3
+go 1.25.6
 
 require (
 	github.com/onsi/ginkgo/v2 v2.27.2
