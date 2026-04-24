@@ -46,7 +46,7 @@ const (
 var (
 	certDaysRemaining = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "cert_watcher_days_remaining",
+			Name: "cert_watcher_days_valid",
 			Help: "Number of days remaining until certificate expires",
 		},
 		[]string{
@@ -108,7 +108,7 @@ func (r *CertificateWatcherReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// Get secret mentioned in the CertificateWatcher resource
 	if err := r.Get(ctx, secretNamespacedName, &secret); err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Info("Could not find secret in namespace", "namespace", secretNamespacedName.Namespace, "name", secretNamespacedName.Name)
+			logger.Info("Could not find secret in namespace", "secretNamespace", secretNamespacedName.Namespace, "secretName", secretNamespacedName.Name)
 			return ctrl.Result{}, nil
 		}
 		logger.Error(err, "Failed to get secret due to system error")
@@ -116,13 +116,13 @@ func (r *CertificateWatcherReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	if len(secret.Data) == 0 {
-		logger.Info("Did not find any data in secret", "namespace", secretNamespacedName.Namespace, "name", secretNamespacedName.Name)
+		logger.Info("Did not find any data in secret", "secretNamespace", secretNamespacedName.Namespace, "secretName", secretNamespacedName.Name)
 		return ctrl.Result{}, nil
 	}
 
 	secretKey := CertificateWatcher.Spec.SecretKey
 
-	logger.Info("Detected secret of type", "type", secret.Type)
+	logger.Info("Detected secret of type", "secretType", secret.Type)
 
 	var certBytes []byte
 
@@ -130,18 +130,18 @@ func (r *CertificateWatcherReconciler) Reconcile(ctx context.Context, req ctrl.R
 		var ok bool
 		certBytes, ok = secret.Data[secretKey]
 		if !ok {
-			logger.Info("Did not find specified key in secret", "key", secretKey)
+			logger.Info("Did not find specified key in secret", "secretKey", secretKey)
 			return ctrl.Result{}, nil
 		}
 	} else {
 		kubeConfigBytes, ok := secret.Data[secretKey]
 		if !ok {
-			logger.Info("Did not find specified key in secret", "key", secretKey)
+			logger.Info("Did not find specified key in secret", "secretKey", secretKey)
 			return ctrl.Result{}, nil
 		}
 		kubeConfig, err := clientcmd.Load(kubeConfigBytes)
 		if err != nil {
-			logger.Info("Could not parse kubeconfig saved at secret key", "key", secretKey)
+			logger.Info("Could not parse kubeconfig saved at secret key", "secretKey", secretKey)
 			return ctrl.Result{}, nil
 		}
 
@@ -176,22 +176,28 @@ func (r *CertificateWatcherReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, nil
 	}
 
+	logger.Info("Successfully parsed certificate")
+
 	certValidUntil := cert.NotAfter
 	certValidDuration := time.Until(certValidUntil)
 	days := int64(certValidDuration.Hours() / 24)
 
-	CertificateWatcher.Status.ValidUntil = certValidUntil.Format(time.RFC3339)
-	CertificateWatcher.Status.ValidDays = strconv.FormatInt(days, 10)
+	if strconv.FormatInt(days, 10) != CertificateWatcher.Status.ValidDays {
+		CertificateWatcher.Status.ValidUntil = certValidUntil.Format(time.RFC3339)
+		CertificateWatcher.Status.ValidDays = strconv.FormatInt(days, 10)
 
-	if err := r.Status().Update(ctx, &CertificateWatcher); err != nil {
-		logger.Error(err, "Cloud not update CertificateWatcher status")
-		return ctrl.Result{}, err
+		if err := r.Status().Update(ctx, &CertificateWatcher); err != nil {
+			logger.Error(err, "Cloud not update CertificateWatcher status")
+			return ctrl.Result{}, err
+		}
+
+		logger.Info("Updated CertWatcher status fields")
+
+		certDaysRemaining.With(prometheus.Labels{
+			"name":      req.Name,
+			"namespace": req.Namespace,
+		}).Set(float64(days))
 	}
-
-	certDaysRemaining.With(prometheus.Labels{
-		"name":      req.Name,
-		"namespace": req.Namespace,
-	}).Set(float64(days))
 
 	return ctrl.Result{RequeueAfter: r.RequeueFrequency}, nil
 }
