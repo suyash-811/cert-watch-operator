@@ -30,10 +30,10 @@ type CertificateWatcherSpec struct {
 	// The following markers will use OpenAPI v3 schema to validate the value
 	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
 
-	// +kubebuilder:validation:MinLength=0
+	// +kubebuilder:validation:MinLength=1
 	// +required
 	SecretName string `json:"secretName"`
-	// +kubebuilder:validation:MinLength=0
+	// +kubebuilder:validation:MinLength=1
 	// +required
 	SecretKey string `json:"secretKey"`
 }
@@ -71,6 +71,10 @@ type CertificateWatcherStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Secret Name",type=string,JSONPath=`.spec.secretName`
+// +kubebuilder:printcolumn:name="Cert Valid Until",type=string,JSONPath=`.status.validUntil`
+// +kubebuilder:printcolumn:name="Cert Valid Days",type=string,JSONPath=`.status.validDays`
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // CertificateWatcher is the Schema for the certificatewatchers API
 type CertificateWatcher struct {

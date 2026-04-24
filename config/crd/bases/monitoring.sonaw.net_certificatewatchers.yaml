@@ -14,7 +14,20 @@ spec:
     singular: certificatewatcher
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.secretName
+      name: Secret Name
+      type: string
+    - jsonPath: .status.validUntil
+      name: Cert Valid Until
+      type: string
+    - jsonPath: .status.validDays
+      name: Cert Valid Days
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: CertificateWatcher is the Schema for the certificatewatchers
@@ -41,10 +54,10 @@ spec:
             description: spec defines the desired state of CertificateWatcher
             properties:
               secretKey:
-                minLength: 0
+                minLength: 1
                 type: string
               secretName:
-                minLength: 0
+                minLength: 1
                 type: string
             required:
             - secretKey
