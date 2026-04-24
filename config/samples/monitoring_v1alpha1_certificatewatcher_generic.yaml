@@ -1,0 +1,11 @@
+apiVersion: monitoring.sonaw.net/v1alpha1
+kind: CertificateWatcher
+metadata:
+  labels:
+    app.kubernetes.io/name: cert-watch-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: sample-generic
+  namespace: default
+spec:
+  secretName: sample-generic
+  secretKey: tls.crt
