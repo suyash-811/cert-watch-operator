@@ -23,22 +23,25 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	monitoringv1alpha1 "github.com/suyash-811/cert-watch-operator/api/v1alpha1"
 )
 
-var _ = Describe("CertificateWatcher Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+const (
+	certWatcherName  = "test-cert-watcher"
+	secretName       = "test-secret"
+	secretKeyGeneric = "tls.crt"
+)
 
+var _ = Describe("CertificateWatcher Controller", func() {
+	Context("When reconciling a CertificateWatcher", func() {
 		ctx := context.Background()
 
 		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Name:      certWatcherName,
+			Namespace: "default",
 		}
 		certificatewatcher := &monitoringv1alpha1.CertificateWatcher{}
 
@@ -48,10 +51,13 @@ var _ = Describe("CertificateWatcher Controller", func() {
 			if err != nil && errors.IsNotFound(err) {
 				resource := &monitoringv1alpha1.CertificateWatcher{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
+						Name:      certWatcherName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: monitoringv1alpha1.CertificateWatcherSpec{
+						SecretName: secretName,
+						SecretKey:  secretKeyGeneric,
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -66,17 +72,13 @@ var _ = Describe("CertificateWatcher Controller", func() {
 			By("Cleanup the specific resource instance CertificateWatcher")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &CertificateWatcherReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+		It("should successfully reconcile the resource", func() {
+			By("Checking if the custom resource was successfully created")
+			Eventually(func(g Gomega) {
+				found := &monitoringv1alpha1.CertificateWatcher{}
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, found)).To(Succeed())
+			}).Should(Succeed())
 			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
 		})
