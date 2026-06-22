@@ -26,6 +26,28 @@ archives:
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
 
+dockers_v2:
+  - dockerfile: "./build/Dockerfile"
+    images: 
+      - "ghcr.io/suyash-811/cert-watch-operator"
+    tags:
+      - "v{{ .Version }}"
+      - "v{{ .Major }}"
+      - "v{{ .Major }}.{{ .Minor }}"
+      - "latest"
+    annotations:
+      "org.opencontainers.image.description": "Kubernetes controller to watch certificates and print their expiry"
+      "org.opencontainers.image.created": "{{.Date}}"
+      "org.opencontainers.image.name": "{{.ProjectName}}"
+      "org.opencontainers.image.revision": "{{.FullCommit}}"
+      "org.opencontainers.image.version": "{{.Version}}"
+      "org.opencontainers.image.source": "https://github.com/suyash-811/cert-watch-operator"
+      "org.opencontainers.image.url": "https://github.com/suyash-811/cert-watch-operator"
+
+    platforms:
+      - linux/amd64
+      - linux/arm64
+
 changelog:
   filters:
     exclude:
