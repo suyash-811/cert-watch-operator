@@ -4,12 +4,11 @@
 1. Implement finalizer to deregister metric before deleting CertificateWatcher resource.
 2. Implement tests for controller
 3. Look into the helm chart plugin for automatic chart generation. The default plugin behaviour embeds the CRD into templates/ dir of the chart. See if this works out or not.
-4. Make sure CI is passing
-5. Add Status conditions which are in accordance to the kubernetes conventions
-6. Create a new ci workflow to release controller and helm chart.
-7. Add helm chart to artifact hub
-8. Helm chart testing CI
-9. Work on readme
+4. Add Status conditions which are in accordance to the kubernetes conventions
+5. Create a new ci workflow to release controller and helm chart.
+6. Add helm chart to artifact hub
+7. Helm chart testing CI
+8. Work on readme
 
 // TODO(user): Add simple overview of use/purpose
 
