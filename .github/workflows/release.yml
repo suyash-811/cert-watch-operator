@@ -1,4 +1,4 @@
-name: goreleaser
+name: Release
 
 on:
   push:
@@ -72,10 +72,10 @@ jobs:
           echo "CHART_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Package chart
-        run: mkdir -p tmp && cd tmp && helm package chart/ --app-version ${{ steps.extract_tag.outputs.APP_VERSION }} --version ${{ steps.extract_tag.outputs.CHART_VERSION }}
+        run: mkdir -p tmp && helm package chart/ --app-version ${{ steps.extract_tag.outputs.APP_VERSION }} --version ${{ steps.extract_tag.outputs.CHART_VERSION }} --destination tmp/
 
       - name: Push chart to registry
         run: |
           CHART_NAME=$(cat chart/Chart.yaml | grep -e "^name:" | awk '{print $2}')
-          cd tmp && helm push "${CHART_NAME}"-${{ steps.extract_tag.outputs.CHART_VERSION }}.tgz "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}"
+          helm push tmp/${CHART_NAME}-${{ steps.extract_tag.outputs.CHART_VERSION }}.tgz "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}"
 
