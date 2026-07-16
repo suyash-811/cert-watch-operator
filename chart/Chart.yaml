@@ -1,0 +1,11 @@
+apiVersion: v2
+name: cert-watch-operator-chart
+description: A Helm chart to install cert-watch-operator
+type: application
+
+version: 0.0.0
+appVersion: "0.0.0"
+
+keywords:
+  - kubernetes
+  - operator

@@ -45,3 +45,37 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  
+  chart-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 #v5.0.1
+      
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  #v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract Tag
+        id: extract_tag
+        run: |
+          echo "APP_VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "CHART_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Package chart
+        run: mkdir -p tmp && cd tmp && helm package chart/ --app-version ${{ steps.extract_tag.outputs.APP_VERSION }} --version ${{ steps.extract_tag.outputs.CHART_VERSION }}
+
+      - name: Push chart to registry
+        run: |
+          CHART_NAME=$(cat chart/Chart.yaml | grep -e "^name:" | awk '{print $2}')
+          cd tmp && helm push "${CHART_NAME}"-${{ steps.extract_tag.outputs.CHART_VERSION }}.tgz "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}"
+
